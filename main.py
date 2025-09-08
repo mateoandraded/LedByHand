@@ -7,7 +7,7 @@ import time
 # Configuración inicial
 ARDUINO_PORT = 'COM3'
 BAUD_RATE = 9600
-VIDEO_SOURCE = 0
+VIDEO_SOURCE = 'http://192.168.68.50:4747/video'
 
 # Inicialización de MediaPipe
 mp_hands = mp.solutions.hands
@@ -52,7 +52,7 @@ last_send_time = 0
 send_interval = 0.1  # Enviar datos cada 100ms
 
 # Factor de escala para reducir el tamaño de la ventana (0.0 a 1.0)
-scale_factor = 0.7  # Reduce a 70% del tamaño original
+scale_factor = 1  # Reduce a 70% del tamaño original
 logo = cv2.imread("logo.png", cv2.IMREAD_UNCHANGED)  # Lee PNG con transparencia
 logo = cv2.resize(logo, (240, 240))  # Ajusta tamaño de la marca de agua
 
@@ -169,7 +169,6 @@ while True:
         roi = resized_frame[y1:y2, x1:x2]
         resized_frame[y1:y2, x1:x2] = (roi * (1 - mask / 255) + overlay * (mask / 255)).astype("uint8")
 
-    cv2.imshow("Control de LEDs con Manos", resized_frame)
 
     cv2.imshow("Control de LEDs con Manos", resized_frame)
 

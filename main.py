@@ -3,66 +3,182 @@ import mediapipe as mp
 import serial
 import time
 
-# Conexión con Arduino (cambia COM4 por el que te salga en el administrador de dispositivos)
-arduino = serial.Serial('COM3', 9600)
-time.sleep(2)
+
+# Configuración inicial
+ARDUINO_PORT = 'COM3'
+BAUD_RATE = 9600
+VIDEO_SOURCE = 0
 
 # Inicialización de MediaPipe
-mpHands = mp.solutions.hands
-hands = mpHands.Hands(max_num_hands=1)
-mpDraw = mp.solutions.drawing_utils
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
 
-cap = cv2.VideoCapture(0)
+# Estilos para dibujar los landmarks (puntos blancos y líneas moradas finas)
+hand_landmark_style = mp_draw.DrawingSpec(color=(255, 255, 255), thickness=4, circle_radius=1)
+hand_connection_style = mp_draw.DrawingSpec(color=(128, 0, 128), thickness=2)
+
+try:
+    # Conexión con Arduino
+    arduino = serial.Serial(ARDUINO_PORT, BAUD_RATE)
+    time.sleep(2)  # Esperar a que se establezca la conexión
+    print(f"Conexión establecida con Arduino en {ARDUINO_PORT}")
+except serial.SerialException:
+    print(f"Error: No se pudo conectar con Arduino en {ARDUINO_PORT}")
+    arduino = None
+
+# Inicializar detección de manos
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.5
+)
+
+# Configurar cámara para mejor calidad
+cap = cv2.VideoCapture(VIDEO_SOURCE)
+if not cap.isOpened():
+    print("Error: No se puede acceder a la cámara")
+    exit()
+
+# Configurar resolución y calidad de la cámara
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FPS, 30)
+cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+cap.set(cv2.CAP_PROP_FOCUS, 0)  # Desactivar autofocus para evitar blur
+
+# Variables para controlar la frecuencia de envío
+last_send_time = 0
+send_interval = 0.1  # Enviar datos cada 100ms
+
+# Factor de escala para reducir el tamaño de la ventana (0.0 a 1.0)
+scale_factor = 0.7  # Reduce a 70% del tamaño original
+logo = cv2.imread("logo.png", cv2.IMREAD_UNCHANGED)  # Lee PNG con transparencia
+logo = cv2.resize(logo, (240, 240))  # Ajusta tamaño de la marca de agua
 
 while True:
     ret, frame = cap.read()
-    frameRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(frameRGB)
+    if not ret:
+        print("Error: No se puede recibir el frame")
+        break
+
+    # Voltear frame horizontalmente para una experiencia espejo
+    frame = cv2.flip(frame, 1)
+
+    # Convertir a RGB para MediaPipe
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(frame_rgb)
 
     if results.multi_hand_landmarks:
-        for handLms in results.multi_hand_landmarks:
-            mpDraw.draw_landmarks(frame, handLms, mpHands.HAND_CONNECTIONS)
+        for hand_landmarks in results.multi_hand_landmarks:
+            # Dibujar landmarks y conexiones con nuevos estilos
+            mp_draw.draw_landmarks(
+                frame,
+                hand_landmarks,
+                mp_hands.HAND_CONNECTIONS,
+                hand_landmark_style,
+                hand_connection_style
+            )
 
+            # Obtener dimensiones del frame
             h, w, c = frame.shape
-            lmList = []
-            for id, lm in enumerate(handLms.landmark):
-                lmList.append([id, int(lm.x * w), int(lm.y * h)])
+            lm_list = []
 
-            # Bounding box (cuadro gris)
-            x_min, y_min = w, h
-            x_max, y_max = 0, 0
-            for lm in handLms.landmark:
-                x, y = int(lm.x * w), int(lm.y * h)
-                x_min, y_min = min(x_min, x), min(y_min, y)
-                x_max, y_max = max(x_max, x), max(y_max, y)
+            # Convertir landmarks a coordenadas de píxeles
+            for id, lm in enumerate(hand_landmarks.landmark):
+                lm_list.append([id, int(lm.x * w), int(lm.y * h)])
 
-            cv2.rectangle(frame, (x_min - 20, y_min - 20), (x_max + 20, y_max + 20), (150, 150, 150), 2)
+            # Calcular bounding box
+            x_coords = [lm.x * w for lm in hand_landmarks.landmark]
+            y_coords = [lm.y * h for lm in hand_landmarks.landmark]
+            x_min, x_max = int(min(x_coords)), int(max(x_coords))
+            y_min, y_max = int(min(y_coords)), int(max(y_coords))
 
-            # ---- Detección de dedos ----
+            # Detección de dedos
             fingers = [0, 0, 0, 0, 0]  # pulgar, índice, medio, anular, meñique
 
-            # Pulgar (depende de la orientación, este ejemplo es mano derecha)
-            if lmList[4][1] > lmList[3][1]:
-                fingers[0] = 1
+            # Detectar mano izquierda o derecha
+            if results.multi_handedness:
+                hand_label = results.multi_handedness[0].classification[0].label
+                is_right_hand = hand_label == "Right"
+            else:
+                # Por defecto asumimos mano derecha si no se detecta
+                is_right_hand = True
+
+            # CORRECCIÓN: Detección mejorada del pulgar
+            # Usamos el punto de referencia 2 (muñeca) para determinar la posición del pulgar
+            if is_right_hand:
+                # Para mano derecha: pulgar abierto si está a la izquierda de la base
+                fingers[0] = 1 if lm_list[4][1] < lm_list[3][1] else 0
+            else:
+                # Para mano izquierda: pulgar abierto si está a la derecha de la base
+                fingers[0] = 1 if lm_list[4][1] > lm_list[3][1] else 0
 
             # Índice, medio, anular, meñique
-            tipIds = [8, 12, 16, 20]
-            for i, id in enumerate(tipIds):
-                if lmList[id][2] < lmList[id - 2][2]:
-                    fingers[i + 1] = 1
+            tip_ids = [8, 12, 16, 20]
+            for i, id in enumerate(tip_ids):
+                fingers[i + 1] = 1 if lm_list[id][2] < lm_list[id - 2][2] else 0
 
-            # Enviar datos al Arduino en formato binario tipo "01001"
+            # Convertir a string binario
             fingers_str = "".join(map(str, fingers))
-            arduino.write((fingers_str + "\n").encode())
 
-            # Mostrar en pantalla qué dedos están arriba
-            cv2.putText(frame, f"Dedos: {fingers_str}", (10, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # Si es mano izquierda, invertir el orden para los LEDs
+            # Orden original: pulgar, índice, medio, anular, meñique
+            # Para mano izquierda: menique, anular, medio, índice, pulgar
+            if not is_right_hand:
+                fingers_str = fingers_str[::-1]
 
-    cv2.imshow("LedByHand", frame)
+            # Enviar datos al Arduino con una frecuencia controlada
+            current_time = time.time()
+            if arduino and (current_time - last_send_time) > send_interval:
+                try:
+                    arduino.write((fingers_str + "\n").encode())
+                    last_send_time = current_time
+                    print(f"Enviado: {fingers_str} - Mano: {'Derecha' if is_right_hand else 'Izquierda'}")
+                except serial.SerialException:
+                    print("Error al enviar datos al Arduino")
+                    arduino = None
+
+
+            # Mostrar si es mano izquierda o derecha
+            hand_type = "Derecha" if is_right_hand else "Izquierda"
+
+
+            # Dibujar bounding box
+            cv2.rectangle(frame, (x_min - 20, y_min - 20), (x_max + 20, y_max + 20), (128, 0, 128), 2)
+            label = f"Mano: {hand_type}"
+            cv2.putText(frame, label, (x_min - 20, y_min - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (128, 0, 128), 2)
+
+    # Instrucciones en pantalla
+    cv2.putText(frame, "Presiona 'q' para salir", (10,20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    # Reducir el tamaño de la ventana manteniendo la relación de aspecto
+    height, width = frame.shape[:2]
+    new_width = int(width * scale_factor)
+    new_height = int(height * scale_factor)
+    resized_frame = cv2.resize(frame, (new_width, new_height))
+    if logo is not None and logo.shape[2] == 4:  # Asegurar que tiene canal alfa
+        overlay = logo[..., :3]
+        mask = logo[..., 3:]  # Canal alfa
+        h, w = overlay.shape[:2]
+        # esquina inferior derecha (usa resized_frame en vez de frame)
+        y1, y2 = resized_frame.shape[0] - h, resized_frame.shape[0]
+        x1, x2 = resized_frame.shape[1] - w, resized_frame.shape[1]
+        roi = resized_frame[y1:y2, x1:x2]
+        resized_frame[y1:y2, x1:x2] = (roi * (1 - mask / 255) + overlay * (mask / 255)).astype("uint8")
+
+    cv2.imshow("Control de LEDs con Manos", resized_frame)
+
+    cv2.imshow("Control de LEDs con Manos", resized_frame)
+
+    # Salir con la tecla 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+# Liberar recursos
 cap.release()
-arduino.close()
+if arduino:
+    arduino.close()
 cv2.destroyAllWindows()

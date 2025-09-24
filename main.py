@@ -7,8 +7,8 @@ import time
 # Configuración inicial
 ARDUINO_PORT = 'COM3'
 BAUD_RATE = 9600
-VIDEO_SOURCE = 'http://192.168.68.50:4747/video'
-
+VIDEO_SOURCE1 = "http://192.168.68.62:4747/video"
+VIDEO_SOURCE = 0
 # Inicialización de MediaPipe
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
@@ -53,8 +53,10 @@ send_interval = 0.1  # Enviar datos cada 100ms
 
 # Factor de escala para reducir el tamaño de la ventana (0.0 a 1.0)
 scale_factor = 1  # Reduce a 70% del tamaño original
-logo = cv2.imread("logo.png", cv2.IMREAD_UNCHANGED)  # Lee PNG con transparencia
-logo = cv2.resize(logo, (240, 240))  # Ajusta tamaño de la marca de agua
+logo = cv2.imread("niot_logo.png", cv2.IMREAD_UNCHANGED)  # Lee PNG con transparencia
+logo = cv2.resize(logo, (350, 240))  # Ajusta tamaño de la marca de agua
+foto = cv2.imread("espol.png", cv2.IMREAD_UNCHANGED)
+foto = cv2.resize(foto, (190 ,100))
 
 while True:
     ret, frame = cap.read()
@@ -164,11 +166,36 @@ while True:
         mask = logo[..., 3:]  # Canal alfa
         h, w = overlay.shape[:2]
         # esquina inferior derecha (usa resized_frame en vez de frame)
+        offset_x = 20
         y1, y2 = resized_frame.shape[0] - h, resized_frame.shape[0]
-        x1, x2 = resized_frame.shape[1] - w, resized_frame.shape[1]
+        x1, x2 = resized_frame.shape[1] - w - offset_x, resized_frame.shape[1] - offset_x
         roi = resized_frame[y1:y2, x1:x2]
         resized_frame[y1:y2, x1:x2] = (roi * (1 - mask / 255) + overlay * (mask / 255)).astype("uint8")
 
+    max_width = 700
+
+    if foto.shape[1] > max_width:
+        scale = max_width / foto.shape[1]
+        new_w = int(foto.shape[1] * scale)
+        new_h = int(foto.shape[0] * scale)
+        foto = cv2.resize(foto, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    if foto is not None and foto.shape[2] == 4:  # asegura canal alfa
+        overlay2 = foto[..., :3]
+        mask2 = foto[..., 3:]
+        h2, w2 = overlay2.shape[:2]
+
+        offset_x = 30  # mover a la derecha
+        offset_y = 50  # subir un poco desde abajo
+
+        # esquina inferior izquierda con desplazamiento
+        y1, y2 = resized_frame.shape[0] - h2 - offset_y, resized_frame.shape[0] - offset_y
+        x1, x2 = offset_x, offset_x + w2
+
+        roi = resized_frame[y1:y2, x1:x2]
+        resized_frame[y1:y2, x1:x2] = (
+                roi * (1 - mask2 / 255) + overlay2 * (mask2 / 255)
+        ).astype("uint8")
 
     cv2.imshow("Control de LEDs con Manos", resized_frame)
 

@@ -5,7 +5,7 @@ import time
 
 
 # Configuración inicial
-ARDUINO_PORT = 'COM3'
+ARDUINO_PORT = 'COM5'
 BAUD_RATE = 9600
 VIDEO_SOURCE1 = "http://192.168.68.62:4747/video"
 VIDEO_SOURCE = 0
@@ -134,9 +134,11 @@ while True:
             current_time = time.time()
             if arduino and (current_time - last_send_time) > send_interval:
                 try:
-                    arduino.write((fingers_str + "\n").encode())
+                    mano_tipo = "MAIN_DERECHA" if is_right_hand else "MAIN_IZQUIERDA"
+                    mensaje = f"{fingers_str},{mano_tipo}\n"
+                    arduino.write(mensaje.encode())
                     last_send_time = current_time
-                    print(f"Enviado: {fingers_str} - Mano: {'Derecha' if is_right_hand else 'Izquierda'}")
+                    print(f"Enviado: {mensaje.strip()}")
                 except serial.SerialException:
                     print("Error al enviar datos al Arduino")
                     arduino = None
